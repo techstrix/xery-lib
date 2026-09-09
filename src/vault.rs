@@ -1,6 +1,6 @@
 mod errors;
 mod password;
-use crate::vault::password::PasswordService;
+use crate::vault::{self, password::PasswordService};
 pub use errors::VaultError;
 use sqlite::Connection;
 
@@ -17,10 +17,14 @@ pub struct Vault {
 impl Default for Vault {
     fn default() -> Self {
         let db_connection = sqlite::open("vaults.db").unwrap();
-
+        Self::new(db_connection)
+    }
+}
+impl Vault {
+    pub fn new(db_connection: sqlite::Connection) -> Self {
         let    query = "CREATE TABLE IF NOT EXISTS  vault_details (id INTEGER PRIMARY KEY,name TEXT UNIQUE,password_hash TEXT);
-                CREATE TABLE IF NOT EXISTS passwords (id INTEGER PRIMARY KEY,identifier TEXT UNIQUE,username TEXT NOT NULL,encrypted_data TEXT NOT NULL,vault TEXT NOT NULL);
-            ";
+                       CREATE TABLE IF NOT EXISTS passwords (id INTEGER PRIMARY KEY,identifier TEXT UNIQUE,username TEXT NOT NULL,encrypted_data TEXT NOT NULL,vault TEXT NOT NULL);
+                   ";
         db_connection.execute(query).unwrap();
         Self {
             name: String::new(),
@@ -32,8 +36,6 @@ impl Default for Vault {
             active_vault: None,
         }
     }
-}
-impl Vault {
     pub fn create_vault(&mut self, name: String, password: String) -> Result<(), VaultError> {
         self.name = name;
         self.password = password;
@@ -53,6 +55,17 @@ impl Vault {
             }
         }
         Ok(())
+    }
+    pub fn list_vaults(&mut self) -> Result<Vec<String>, VaultError> {
+        let query = "SELECT name FROM vault_details";
+        let mut statement = self.db_connection.prepare(query)?;
+        let mut vault_names: Vec<String> = Vec::new();
+        while let sqlite::State::Row = statement.next()? {
+            let name: String = statement.read(0)?;
+            vault_names.push(name);
+        }
+
+        Ok(vault_names)
     }
     pub fn login_vault(&mut self, vault_name: &str, password: &str) -> Result<(), VaultError> {
         if self.login_status {
@@ -75,16 +88,9 @@ impl Vault {
                 self.active_vault = Some(vault_name.to_string());
                 self.active_hash = Some(vault_hash);
             } else {
-                println!("Hit");
+                return Err(VaultError::WrongPassword);
             }
-        } else {
-            return Err(VaultError::WrongPassword);
         }
-
-        println!(
-            "Active vault {:?} vault status {:?}",
-            self.active_vault, self.active_hash,
-        );
 
         Ok(())
     }
@@ -182,10 +188,14 @@ impl Vault {
         Ok(retrieved_password)
     }
 
-    pub fn logout_vault(&mut self) {
-        if self.login_status {
-            self.login_status = false;
-            self.active_vault = None;
+    pub fn logout_vault(&mut self) -> Result<(), VaultError> {
+        if !self.login_status {
+            return Err(VaultError::NotLoggedIn);
         }
+
+        self.login_status = false;
+        self.active_vault = None;
+        self.active_hash = None;
+        Ok(())
     }
 }
